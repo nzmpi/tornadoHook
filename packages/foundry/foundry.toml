@@ -29,7 +29,8 @@ localhost = "http://127.0.0.1:8545"
 [fmt]
 sort_imports = true
 
-
+[lint]
+lint_on_build = false
 
 
 # See more config options https://book.getfoundry.sh/reference/config/overview
