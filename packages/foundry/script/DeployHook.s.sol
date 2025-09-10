@@ -1,17 +1,22 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.26;
 
-import "./DeployHelpers.s.sol";
 import {IHasher, TornadoHook} from "../contracts/TornadoHook.sol";
 import {Groth16Verifier as CircomVerifier} from "../contracts/verifiers/CircomVerifier.sol";
 import {HonkVerifier as NoirVerifier} from "../contracts/verifiers/NoirVerifier.sol";
+import "./DeployHelpers.s.sol";
+import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 import {PoolManager} from "v4-core/PoolManager.sol";
-import {PoolModifyLiquidityTest} from "v4-core/test/PoolModifyLiquidityTest.sol";
-import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
+import {PoolModifyLiquidityTest} from "v4-core/test/PoolModifyLiquidityTest.sol";
+import {Currency} from "v4-core/types/Currency.sol";
+import {PoolKey} from "v4-core/types/PoolKey.sol";
+import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 
 contract DeployHook is ScaffoldETHDeploy {
     using HookMiner for address;
+
+    uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
 
     struct Data {
         bytes data;
@@ -31,14 +36,29 @@ contract DeployHook is ScaffoldETHDeploy {
         NoirVerifier noirVerifier = new NoirVerifier();
 
         PoolManager manager = new PoolManager(deployer);
-        //PoolModifyLiquidityTest modifyLiquidityRouter = new PoolModifyLiquidityTest(manager);
+        new PoolModifyLiquidityTest(manager);
         uint160 flags = uint160(
             Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG
                 | Hooks.AFTER_ADD_LIQUIDITY_RETURNS_DELTA_FLAG | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
                 | Hooks.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
         );
         bytes32 salt;
-        (, salt) = create2Deployer.find(flags, type(TornadoHook).creationCode, abi.encode(manager, hasher, circomVerifier, noirVerifier));
+        (, salt) = create2Deployer.find(
+            flags, type(TornadoHook).creationCode, abi.encode(manager, hasher, circomVerifier, noirVerifier)
+        );
         TornadoHook hook = new TornadoHook{salt: salt}(manager, hasher, circomVerifier, noirVerifier);
+
+        address token0 = address(new MockERC20("token0", "tkn0", 18));
+        address token1 = address(new MockERC20("token1", "tkn1", 18));
+
+        (token0, token1) = token0 < token1 ? (token0, token1) : (token1, token0);
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(token0),
+            currency1: Currency.wrap(token1),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: hook
+        });
+        manager.initialize(key, SQRT_PRICE_1_1);
     }
 }
