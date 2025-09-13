@@ -1375,7 +1375,7 @@ const deployedContracts = {
         },
       ],
       inheritedFunctions: {},
-      deployedOnBlock: 3,
+      deployedOnBlock: 4,
     },
     PoolModifyLiquidityTest: {
       address: "0xe1aa25618fa0c7a1cfdab5d6b456af611873b629",
@@ -1403,94 +1403,6 @@ const deployedContracts = {
             },
           ],
           stateMutability: "view",
-        },
-        {
-          type: "function",
-          name: "modifyLiquidity",
-          inputs: [
-            {
-              name: "key",
-              type: "tuple",
-              internalType: "struct PoolKey",
-              components: [
-                {
-                  name: "currency0",
-                  type: "address",
-                  internalType: "Currency",
-                },
-                {
-                  name: "currency1",
-                  type: "address",
-                  internalType: "Currency",
-                },
-                {
-                  name: "fee",
-                  type: "uint24",
-                  internalType: "uint24",
-                },
-                {
-                  name: "tickSpacing",
-                  type: "int24",
-                  internalType: "int24",
-                },
-                {
-                  name: "hooks",
-                  type: "address",
-                  internalType: "contract IHooks",
-                },
-              ],
-            },
-            {
-              name: "params",
-              type: "tuple",
-              internalType: "struct ModifyLiquidityParams",
-              components: [
-                {
-                  name: "tickLower",
-                  type: "int24",
-                  internalType: "int24",
-                },
-                {
-                  name: "tickUpper",
-                  type: "int24",
-                  internalType: "int24",
-                },
-                {
-                  name: "liquidityDelta",
-                  type: "int256",
-                  internalType: "int256",
-                },
-                {
-                  name: "salt",
-                  type: "bytes32",
-                  internalType: "bytes32",
-                },
-              ],
-            },
-            {
-              name: "hookData",
-              type: "bytes",
-              internalType: "bytes",
-            },
-            {
-              name: "settleUsingBurn",
-              type: "bool",
-              internalType: "bool",
-            },
-            {
-              name: "takeClaims",
-              type: "bool",
-              internalType: "bool",
-            },
-          ],
-          outputs: [
-            {
-              name: "delta",
-              type: "int256",
-              internalType: "BalanceDelta",
-            },
-          ],
-          stateMutability: "payable",
         },
         {
           type: "function",
@@ -1952,7 +1864,7 @@ const deployedContracts = {
         },
       ],
       inheritedFunctions: {},
-      deployedOnBlock: 5,
+      deployedOnBlock: 4,
     },
     MockERC201: {
       address: "0xed1db453c3156ff3155a97ad217b3087d5dc5f6e",
