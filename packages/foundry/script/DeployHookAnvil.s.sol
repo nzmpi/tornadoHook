@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IHasher, TornadoHook} from "../contracts/TornadoHook.sol";
+import {TornadoHookEntry} from "../contracts/TornadoHookEntry.sol";
 import {Groth16Verifier as CircomVerifier} from "../contracts/verifiers/CircomVerifier.sol";
 import {HonkVerifier as NoirVerifier} from "../contracts/verifiers/NoirVerifier.sol";
 import "./DeployHelpers.s.sol";
@@ -12,7 +13,6 @@ import {PoolModifyLiquidityTest} from "v4-core/test/PoolModifyLiquidityTest.sol"
 import {Currency} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
-import {TornadoHookEntry} from "../contracts/TornadoHookEntry.sol";
 
 contract DeployHookAnvil is ScaffoldETHDeploy {
     using HookMiner for address;
