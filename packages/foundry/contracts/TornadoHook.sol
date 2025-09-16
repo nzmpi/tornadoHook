@@ -1,47 +1,42 @@
 //SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import "./Constants.sol";
+import {IHasher} from "./IHasher.sol";
 import {Groth16Verifier as CircomVerifier} from "./verifiers/CircomVerifier.sol";
 import {HonkVerifier as NoirVerifier} from "./verifiers/NoirVerifier.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
-import {TickMath} from "v4-core/libraries/TickMath.sol";
-import {BalanceDelta, BalanceDeltaLibrary} from "v4-core/types/BalanceDelta.sol";
+import {BalanceDelta, toBalanceDelta} from "v4-core/types/BalanceDelta.sol";
 import {PoolId} from "v4-core/types/PoolId.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {ModifyLiquidityParams} from "v4-core/types/PoolOperation.sol";
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 
-interface IHasher {
-    function poseidon(bytes32[2] memory) external pure returns (bytes32);
+struct WithdrawalData {
+    bool isCircom;
+    bytes32 nullifierHash;
+    bytes32 root;
+    address recipient;
+    bytes proof;
 }
 
+/**
+ * @title TornadoHook
+ * @notice A Tornado Cash implementation as a hook
+ * @author https://github.com/nzmpi
+ */
 contract TornadoHook is BaseHook {
     using StateLibrary for IPoolManager;
 
-    uint256 constant FIELD_SIZE = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
-    bytes32 constant ZERO_VALUE = 0x2fe54c60d3acabf3343a35b6eba15db4821b340f76e741e2249685ed4899af6c; // = keccak256("tornado") % FIELD_SIZE
-    uint256 constant LEVELS = 20;
-    int24 constant MIN_TICK = TickMath.MIN_TICK + 52;
-    int24 constant MAX_TICK = TickMath.MAX_TICK - 52;
-    uint24 constant FEE = 3000;
-    int24 constant TICK_SPACING = 60;
-    int256 constant LIQUIDITY_DELTA = 10 ether;
-
+    uint256 constant BASE_FEE = 10000;
     IHasher immutable HASHER;
     CircomVerifier immutable CIRCOM_VERIFIER;
     NoirVerifier immutable NOIR_VERIFIER;
 
-    struct WithdrawalData {
-        bool isCircom;
-        bytes32 nullifierHash;
-        bytes32 root;
-        address recipient;
-        bytes proof;
-    }
-
     mapping(PoolId => mapping(uint256 level => bytes32)) filledSubtrees;
+    mapping(bytes32 key => bytes32[LEVELS + 1]) paths;
     mapping(bytes32 commitment => bool) public commitments;
     mapping(bytes32 nullifierHash => bool) public nullifierHashes;
     mapping(bytes32 root => bool) public roots;
@@ -60,7 +55,7 @@ contract TornadoHook is BaseHook {
     error TH_WrongTick();
     error TH_WrongTickSpacing();
 
-    event Deposit(bytes32 indexed commitment, uint256 indexed tree, uint256 indexed leafIndex, bytes32 root);
+    event Deposit(bytes32 indexed commitment, uint256 indexed tree, uint256 indexed leafIndex);
     event Withdrawal(address indexed to, bytes32 indexed nullifierHash);
 
     constructor(IPoolManager _manager, IHasher _hasher, CircomVerifier _circomVerifier, NoirVerifier _noirVerifier)
@@ -77,7 +72,7 @@ contract TornadoHook is BaseHook {
             beforeInitialize: false,
             afterInitialize: false,
             beforeAddLiquidity: true,
-            beforeRemoveLiquidity: true,
+            beforeRemoveLiquidity: false,
             afterAddLiquidity: true,
             afterRemoveLiquidity: true,
             beforeSwap: false,
@@ -91,6 +86,21 @@ contract TornadoHook is BaseHook {
         });
     }
 
+    /**
+     * Get a created path for a leaf
+     * @notice not save, reveals the commitment position
+     * @param poolId - pool id of the pool
+     * @param tree - tree number
+     * @param index - index of the leaf in a tree
+     * @return path - LEVELS amount of sibling nodes + the corresponding root as a last element
+     */
+    function getPath(PoolId poolId, uint256 tree, uint256 index) external view returns (bytes32[LEVELS + 1] memory) {
+        return paths[_getKey(poolId, tree, index)];
+    }
+
+    /**
+     * @notice Only certain poolKey and params are allowed
+     */
     function _beforeAddLiquidity(
         address,
         PoolKey calldata poolKey,
@@ -100,23 +110,16 @@ contract TornadoHook is BaseHook {
         _checkPoolKey(poolKey);
         _checkParams(params);
         PoolId poolId = poolKey.toId();
+        // create a tree if there is no liquidity
         if (poolManager.getLiquidity(poolId) == 0) {
             _newTreeState(poolId);
         }
         return this.beforeAddLiquidity.selector;
     }
 
-    function _beforeRemoveLiquidity(
-        address,
-        PoolKey calldata poolKey,
-        ModifyLiquidityParams calldata params,
-        bytes calldata
-    ) internal pure override returns (bytes4) {
-        _checkPoolKey(poolKey);
-        _checkParams(params);
-        return this.beforeRemoveLiquidity.selector;
-    }
-
+    /**
+     * @notice Distributes fees to the pool and inserts the commitment to the tree
+     */
     function _afterAddLiquidity(
         address,
         PoolKey calldata poolKey,
@@ -125,29 +128,43 @@ contract TornadoHook is BaseHook {
         BalanceDelta feeDelta,
         bytes calldata hookData
     ) internal override returns (bytes4, BalanceDelta) {
+        // donate all generated fees to the pool
         poolManager.donate(poolKey, uint128(feeDelta.amount0()), uint128(feeDelta.amount1()), "");
+
         bytes32 commitment = abi.decode(hookData, (bytes32));
         if (commitments[commitment]) revert TH_CommitmentExists();
         commitments[commitment] = true;
 
+        // insert the commitment to the tree
         PoolId poolId = poolKey.toId();
-        (uint256 insertedIndex, bytes32 root) = _insert(poolId, commitment);
+        (uint256 insertedIndex, uint256 tree) = _insert(poolId, commitment);
 
-        emit Deposit(commitment, currentTreeNumber[poolId], insertedIndex, root);
+        emit Deposit(commitment, tree, insertedIndex);
         return (this.afterAddLiquidity.selector, feeDelta);
     }
 
+    /**
+     * @notice Distributes fees to the pool, verifies a proof and sends tokens to the recipient
+     */
     function _afterRemoveLiquidity(
         address,
         PoolKey calldata poolKey,
         ModifyLiquidityParams calldata,
-        BalanceDelta,
+        BalanceDelta callerDelta,
         BalanceDelta feeDelta,
         bytes calldata hookData
     ) internal override returns (bytes4, BalanceDelta) {
-        bool isEmpty = poolManager.getLiquidity(poolKey.toId()) == 0;
+        uint256 liquidity = poolManager.getLiquidity(poolKey.toId());
+        bool isEmpty = liquidity == 0;
+        // If the pool is empty, withdraw everything.
+        // Otherwise, distribute the fees to the pool minus the recipient's share
         if (!isEmpty) {
-            poolManager.donate(poolKey, uint128(feeDelta.amount0()), uint128(feeDelta.amount1()), "");
+            uint256 feesLeft = BASE_FEE - (uint256(LIQUIDITY_DELTA) * BASE_FEE) / (liquidity + uint256(LIQUIDITY_DELTA));
+            uint128 feeDelta0 = uint128(uint128(feeDelta.amount0()) * feesLeft / BASE_FEE);
+            uint128 feeDelta1 = uint128(uint128(feeDelta.amount1()) * feesLeft / BASE_FEE);
+
+            poolManager.donate(poolKey, feeDelta0, feeDelta1, "");
+            feeDelta = toBalanceDelta(int128(feeDelta0), int128(feeDelta1));
         }
 
         WithdrawalData memory withdrawalData = abi.decode(hookData, (WithdrawalData));
@@ -177,20 +194,33 @@ contract TornadoHook is BaseHook {
             publicInputs[0] = withdrawalData.root;
             publicInputs[1] = withdrawalData.nullifierHash;
             publicInputs[2] = bytes32(abi.encode(withdrawalData.recipient));
+            // @dev Noir verifier reverts if the proof is invalid
             NOIR_VERIFIER.verify(withdrawalData.proof, publicInputs);
         }
 
         nullifierHashes[withdrawalData.nullifierHash] = true;
         emit Withdrawal(withdrawalData.recipient, withdrawalData.nullifierHash);
-        return (this.afterRemoveLiquidity.selector, isEmpty ? BalanceDeltaLibrary.ZERO_DELTA : feeDelta);
+
+        // send the tokens to the recipient
+        BalanceDelta toSend = isEmpty ? callerDelta : callerDelta - feeDelta;
+        poolManager.take(poolKey.currency0, withdrawalData.recipient, uint128(toSend.amount0()));
+        poolManager.take(poolKey.currency1, withdrawalData.recipient, uint128(toSend.amount1()));
+
+        return (this.afterRemoveLiquidity.selector, callerDelta);
     }
 
+    /**
+     * @notice Verifies the pool key
+     */
     function _checkPoolKey(PoolKey calldata _poolKey) internal pure {
         if (_poolKey.currency0.isAddressZero() || _poolKey.currency1.isAddressZero()) revert TH_OnlyERC20();
         if (_poolKey.fee != FEE) revert TH_WrongFee();
         if (_poolKey.tickSpacing != TICK_SPACING) revert TH_WrongTickSpacing();
     }
 
+    /**
+     * @notice Verifies the params
+     */
     function _checkParams(ModifyLiquidityParams calldata _params) internal pure {
         if (_params.tickLower != MIN_TICK || _params.tickUpper != MAX_TICK) revert TH_WrongTick();
         if (
@@ -199,17 +229,23 @@ contract TornadoHook is BaseHook {
         ) {
             revert TH_WrongLiquidityDelta();
         }
-        if (_params.salt != 0) revert TH_WrongSalt();
+        if (_params.salt != SALT) revert TH_WrongSalt();
     }
 
-    function _insert(PoolId _poolId, bytes32 _leaf) internal returns (uint256 index, bytes32 root) {
+    /**
+     * @notice Inserts a commitment into the tree
+     */
+    function _insert(PoolId _poolId, bytes32 _leaf) internal returns (uint256 tree, uint256 index) {
         uint256 nextIndex = nextLeafIndex[_poolId];
+        // if the tree is full, create a new one
         if (nextIndex == (1 << LEVELS)) {
             _newTreeState(_poolId);
             nextIndex = 0;
         }
 
         index = nextIndex;
+        tree = currentTreeNumber[_poolId];
+        bytes32 key = _getKey(_poolId, tree, index);
         bytes32 left;
         bytes32 right;
         for (uint256 i; i < LEVELS; ++i) {
@@ -217,19 +253,24 @@ contract TornadoHook is BaseHook {
                 left = _leaf;
                 right = _zeros(i);
                 filledSubtrees[_poolId][i] = _leaf;
+                paths[key][i] = right;
             } else {
                 left = filledSubtrees[_poolId][i];
                 right = _leaf;
+                paths[key][i] = left;
             }
             _leaf = HASHER.poseidon([left, right]);
             nextIndex /= 2;
         }
 
-        root = _leaf;
-        roots[root] = true;
+        paths[key][LEVELS] = _leaf;
+        roots[_leaf] = true;
         nextLeafIndex[_poolId] = index + 1;
     }
 
+    /**
+     * @notice Creates a new tree
+     */
     function _newTreeState(PoolId _poolId) internal {
         for (uint256 i; i < LEVELS; ++i) {
             filledSubtrees[_poolId][i] = _zeros(i);
@@ -237,6 +278,10 @@ contract TornadoHook is BaseHook {
 
         delete nextLeafIndex[_poolId];
         ++currentTreeNumber[_poolId];
+    }
+
+    function _getKey(PoolId _poolId, uint256 _tree, uint256 _index) internal pure returns (bytes32) {
+        return keccak256(abi.encode(_poolId, _tree, _index));
     }
 
     function _zeros(uint256 i) internal pure returns (bytes32) {

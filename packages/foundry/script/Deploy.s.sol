@@ -2,11 +2,17 @@
 pragma solidity ^0.8.19;
 
 import "./DeployHelpers.s.sol";
-import {DeployHook} from "./DeployHook.s.sol";
+import {DeployHookAnvil} from "./DeployHookAnvil.s.sol";
+import {DeployHookTestnet} from "./DeployHookTestnet.s.sol";
 
 contract DeployScript is ScaffoldETHDeploy {
     function run() external {
-        DeployHook deployHook = new DeployHook();
-        deployHook.run();
+        if (block.chainid == 31337) {
+            DeployHookAnvil deployHook = new DeployHookAnvil();
+            deployHook.run();
+        } else {
+            DeployHookTestnet deployHook = new DeployHookTestnet();
+            deployHook.run();
+        }
     }
 }
