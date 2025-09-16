@@ -22,6 +22,11 @@ struct WithdrawalData {
     bytes proof;
 }
 
+/**
+ * @title TornadoHook
+ * @notice A Tornado Cash implementation as a hook
+ * @author https://github.com/nzmpi
+ */
 contract TornadoHook is BaseHook {
     using StateLibrary for IPoolManager;
 
@@ -81,10 +86,21 @@ contract TornadoHook is BaseHook {
         });
     }
 
+    /**
+     * Get a created path for a leaf
+     * @notice not save, reveals the commitment position
+     * @param poolId - pool id of the pool
+     * @param tree - tree number
+     * @param index - index of the leaf in a tree
+     * @return path - LEVELS amount of sibling nodes + the corresponding root as a last element
+     */
     function getPath(PoolId poolId, uint256 tree, uint256 index) external view returns (bytes32[LEVELS + 1] memory) {
         return paths[_getKey(poolId, tree, index)];
     }
 
+    /**
+     * @notice Only certain poolKey and params are allowed
+     */
     function _beforeAddLiquidity(
         address,
         PoolKey calldata poolKey,
@@ -94,12 +110,16 @@ contract TornadoHook is BaseHook {
         _checkPoolKey(poolKey);
         _checkParams(params);
         PoolId poolId = poolKey.toId();
+        // create a tree if there is no liquidity
         if (poolManager.getLiquidity(poolId) == 0) {
             _newTreeState(poolId);
         }
         return this.beforeAddLiquidity.selector;
     }
 
+    /**
+     * @notice Distributes fees to the pool and inserts the commitment to the tree
+     */
     function _afterAddLiquidity(
         address,
         PoolKey calldata poolKey,
@@ -108,19 +128,24 @@ contract TornadoHook is BaseHook {
         BalanceDelta feeDelta,
         bytes calldata hookData
     ) internal override returns (bytes4, BalanceDelta) {
+        // donate all generated fees to the pool
         poolManager.donate(poolKey, uint128(feeDelta.amount0()), uint128(feeDelta.amount1()), "");
 
         bytes32 commitment = abi.decode(hookData, (bytes32));
         if (commitments[commitment]) revert TH_CommitmentExists();
         commitments[commitment] = true;
 
+        // insert the commitment to the tree
         PoolId poolId = poolKey.toId();
-        uint256 insertedIndex = _insert(poolId, commitment);
+        (uint256 insertedIndex, uint256 tree) = _insert(poolId, commitment);
 
-        emit Deposit(commitment, currentTreeNumber[poolId], insertedIndex);
+        emit Deposit(commitment, tree, insertedIndex);
         return (this.afterAddLiquidity.selector, feeDelta);
     }
 
+    /**
+     * @notice Distributes fees to the pool, verifies a proof and sends tokens to the recipient
+     */
     function _afterRemoveLiquidity(
         address,
         PoolKey calldata poolKey,
@@ -131,6 +156,8 @@ contract TornadoHook is BaseHook {
     ) internal override returns (bytes4, BalanceDelta) {
         uint256 liquidity = poolManager.getLiquidity(poolKey.toId());
         bool isEmpty = liquidity == 0;
+        // If the pool is empty, withdraw everything.
+        // Otherwise, distribute the fees to the pool minus the recipient's share
         if (!isEmpty) {
             uint256 feesLeft = BASE_FEE - (uint256(LIQUIDITY_DELTA) * BASE_FEE) / (liquidity + uint256(LIQUIDITY_DELTA));
             uint128 feeDelta0 = uint128(uint128(feeDelta.amount0()) * feesLeft / BASE_FEE);
@@ -167,12 +194,14 @@ contract TornadoHook is BaseHook {
             publicInputs[0] = withdrawalData.root;
             publicInputs[1] = withdrawalData.nullifierHash;
             publicInputs[2] = bytes32(abi.encode(withdrawalData.recipient));
+            // @dev Noir verifier reverts if the proof is invalid
             NOIR_VERIFIER.verify(withdrawalData.proof, publicInputs);
         }
 
         nullifierHashes[withdrawalData.nullifierHash] = true;
         emit Withdrawal(withdrawalData.recipient, withdrawalData.nullifierHash);
 
+        // send the tokens to the recipient
         BalanceDelta toSend = isEmpty ? callerDelta : callerDelta - feeDelta;
         poolManager.take(poolKey.currency0, withdrawalData.recipient, uint128(toSend.amount0()));
         poolManager.take(poolKey.currency1, withdrawalData.recipient, uint128(toSend.amount1()));
@@ -180,12 +209,18 @@ contract TornadoHook is BaseHook {
         return (this.afterRemoveLiquidity.selector, callerDelta);
     }
 
+    /**
+     * @notice Verifies the pool key
+     */
     function _checkPoolKey(PoolKey calldata _poolKey) internal pure {
         if (_poolKey.currency0.isAddressZero() || _poolKey.currency1.isAddressZero()) revert TH_OnlyERC20();
         if (_poolKey.fee != FEE) revert TH_WrongFee();
         if (_poolKey.tickSpacing != TICK_SPACING) revert TH_WrongTickSpacing();
     }
 
+    /**
+     * @notice Verifies the params
+     */
     function _checkParams(ModifyLiquidityParams calldata _params) internal pure {
         if (_params.tickLower != MIN_TICK || _params.tickUpper != MAX_TICK) revert TH_WrongTick();
         if (
@@ -197,15 +232,20 @@ contract TornadoHook is BaseHook {
         if (_params.salt != SALT) revert TH_WrongSalt();
     }
 
-    function _insert(PoolId _poolId, bytes32 _leaf) internal returns (uint256 index) {
+    /**
+     * @notice Inserts a commitment into the tree
+     */
+    function _insert(PoolId _poolId, bytes32 _leaf) internal returns (uint256 tree, uint256 index) {
         uint256 nextIndex = nextLeafIndex[_poolId];
+        // if the tree is full, create a new one
         if (nextIndex == (1 << LEVELS)) {
             _newTreeState(_poolId);
             nextIndex = 0;
         }
 
         index = nextIndex;
-        bytes32 key = _getKey(_poolId, currentTreeNumber[_poolId], index);
+        tree = currentTreeNumber[_poolId];
+        bytes32 key = _getKey(_poolId, tree, index);
         bytes32 left;
         bytes32 right;
         for (uint256 i; i < LEVELS; ++i) {
@@ -228,6 +268,9 @@ contract TornadoHook is BaseHook {
         nextLeafIndex[_poolId] = index + 1;
     }
 
+    /**
+     * @notice Creates a new tree
+     */
     function _newTreeState(PoolId _poolId) internal {
         for (uint256 i; i < LEVELS; ++i) {
             filledSubtrees[_poolId][i] = _zeros(i);
