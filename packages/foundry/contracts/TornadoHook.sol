@@ -137,7 +137,7 @@ contract TornadoHook is BaseHook {
 
         // insert the commitment to the tree
         PoolId poolId = poolKey.toId();
-        (uint256 insertedIndex, uint256 tree) = _insert(poolId, commitment);
+        (uint256 tree, uint256 insertedIndex) = _insert(poolId, commitment);
 
         emit Deposit(commitment, tree, insertedIndex);
         return (this.afterAddLiquidity.selector, feeDelta);
