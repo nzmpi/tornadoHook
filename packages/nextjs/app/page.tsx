@@ -1,13 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Link from "next/link";
 import type { NextPage } from "next";
-import { useAccount, useReadContract, useWriteContract } from "wagmi";
-import { BugAntIcon, MagnifyingGlassIcon } from "@heroicons/react/24/outline";
+import { useAccount } from "wagmi";
 import { AddressInput, IntegerInput, InputBase } from "~~/components/scaffold-eth";
 import { useScaffoldReadContract, useScaffoldWriteContract, useDeployedContractInfo } from "~~/hooks/scaffold-eth";
-import { ethers, keccak256 } from "ethers";
+import { ethers } from "ethers";
 import { poseidon1, poseidon2 } from "poseidon-lite";
 import { Noir, InputMap } from "@noir-lang/noir_js";
 import { UltraHonkBackend, ProofData } from "@aztec/bb.js";
@@ -28,44 +26,38 @@ const Home: NextPage = () => {
     const [secretToDeposit, setSecretToDeposit] = useState(0n);
     const [nullifierStringToWithdraw, setNullifierStringToWithdraw] = useState("");
     const [nullifierToWithdraw, setNullifierToWithdraw] = useState(0n);
-    const [secretStringToWithdraw, setSecretStringToWithdraw] = useState("");
     const [secretToWithdraw, setSecretToWithdraw] = useState(0n);
     const [commitmentToDeposit, setCommitmentToDeposit] = useState("");
-    const [commitmentToWithdraw, setCommitmentToWithdraw] = useState("");
     const [recipient, setRecipient] = useState(connectedAddress?? "");
-    const [nullifierHashToDeposit, setNullifierHashToDeposit] = useState(0n);
     const [nullifierHashToWithdraw, setNullifierHashToWithdraw] = useState(0n);
-    const [secretHashToDeposit, setSecretHashToDeposit] = useState(0n);
-    const [secretHashToWithdraw, setSecretHashToWithdraw] = useState(0n);
-    const [treeNumber, setTreeNumber] = useState("");
     const [commitmentIndex, setCommitmentIndex] = useState("");
     const [verifier, setVerifier] = useState<"circom" | "noir">("circom");
+    const [root, setRoot] = useState("");
     const [proof, setProof] = useState("");
-    const [calculatingProof, setCalculatingProof] = useState(false);
-    const [status, setStatus] = useState("");
 
-    const { data: token0Contract } = useDeployedContractInfo({ contractName: "MockERC20" });
-    const { data: token1Contract } = useDeployedContractInfo({ contractName: "MockERC201" });
-    const { data: router } = useDeployedContractInfo({ contractName: "PoolModifyLiquidityTest" });
+    const { data: token0Contract } = useDeployedContractInfo({ contractName: "Token0" });
+    const { data: token1Contract } = useDeployedContractInfo({ contractName: "Token1" });
     const { data: hook } = useDeployedContractInfo({ contractName: "TornadoHook" });
+    const { data: entry } = useDeployedContractInfo({ contractName: "TornadoHookEntry" });
+
     const { data: balanceToken0 } = useScaffoldReadContract({
-        contractName: "MockERC20",
+        contractName: "Token0",
         functionName: "balanceOf",
         args: [connectedAddress],
     });
     const { data: balanceToken1 } = useScaffoldReadContract({
-        contractName: "MockERC201",
+        contractName: "Token1",
         functionName: "balanceOf",
         args: [connectedAddress],
     });
 
-    const { writeContractAsync: token0ContractWrite } = useScaffoldWriteContract({ contractName: "MockERC20" });
-    const { writeContractAsync: token1ContractWrite } = useScaffoldWriteContract({ contractName: "MockERC201" });
-    const { writeContractAsync: routerWrite } = useScaffoldWriteContract({ contractName: "PoolModifyLiquidityTest" });
+    const { writeContractAsync: token0ContractWrite } = useScaffoldWriteContract({ contractName: "Token0" });
+    const { writeContractAsync: token1ContractWrite } = useScaffoldWriteContract({ contractName: "Token1" });
+    const { writeContractAsync: entryWrite } = useScaffoldWriteContract({ contractName: "TornadoHookEntry" });
 
     const compiledCircuit = JSON.parse(JSON.stringify(circuit));
     const noir = new Noir(compiledCircuit);
-    const backend = new UltraHonkBackend(circuit.bytecode); 
+    const backend = new UltraHonkBackend(circuit.bytecode);
 
     const poolKey = {
         currency0: token0Contract?.address?? "0x0000000000000000000000000000000000000000",
@@ -75,10 +67,22 @@ const Home: NextPage = () => {
         hooks: hook?.address?? "0x0000000000000000000000000000000000000000"
     };
 
+    const { data: treeNumber } = useScaffoldReadContract({
+        contractName: "TornadoHook",
+        functionName: "currentTreeNumber",
+        args: [toId()],
+    });
+
+    const { data: nextLeafIndex } = useScaffoldReadContract({
+        contractName: "TornadoHook",
+        functionName: "nextLeafIndex",
+        args: [toId()],
+    });
+
     const { data: path } = useScaffoldReadContract({
         contractName: "TornadoHook",
         functionName: "getPath",
-        args: [toId(), BigInt(treeNumber), BigInt(commitmentIndex)],
+        args: [toId(), treeNumber?? 0n, BigInt(commitmentIndex)],
     });
 
     function toId() {
@@ -93,29 +97,13 @@ const Home: NextPage = () => {
         return BigInt(ethers.keccak256(ethers.toUtf8Bytes(preimage))) % FIELD_SIZE;
     }
 
-    function getParams(isDeposit: boolean) {
-        return {
-            tickLower: -887220,
-            tickUpper: 887220,
-            liquidityDelta: isDeposit ? ethers.parseEther("10") : ethers.parseEther("-10"),
-            salt: ethers.hexlify(ethers.zeroPadValue(ethers.toBeHex(0), 32))
-        };
-    }
-
     async function getWithdrawalData() {
-        const root = path ? path[LEVELS] : "0x0000000000000000000000000000000000000000000000000000000000000000";
-        const withdrawalData = {
-            isCircom: verifier === "circom" ? true : false,
-            nullifierHash: "0x" + nullifierHashToWithdraw.toString(16),
-            root: root,
-            recipient: recipient,
-            proof: await getNoirProof(root)
-        };
         return {
-            hookData: ethers.hexlify(abiCoder.encode(
-                ["tuple(bool, bytes32 , bytes32, address, bytes)"],
-                [[withdrawalData.isCircom, withdrawalData.nullifierHash, withdrawalData.root, withdrawalData.recipient, withdrawalData.proof]]
-            ))
+            isCircom: verifier === "circom" ? true : false,
+            nullifierHash: ethers.hexlify(ethers.zeroPadValue(ethers.toBeHex(nullifierHashToWithdraw), 32)) as `0x${string}`,
+            root: root as `0x${string}`,
+            recipient: recipient,
+            proof: proof as `0x${string}`
         };
     }
 
@@ -123,6 +111,7 @@ const Home: NextPage = () => {
         return (input * input) % FIELD_SIZE;
     }
 
+    // TODO: check if it workable at all
     async function getCircomProof() {
         const relayer = "0x0000000000000000000000000000000000000000";
         const fee = "0x0000000000000000000000000000000000000000000000000000000000000000";
@@ -147,20 +136,18 @@ const Home: NextPage = () => {
             refundSquare: fee
         };
         
-        setStatus("Generating proof...");
         const mainWasm = await fetch("../../circuits/circom/main_js/main.wasm");
         const mainWasmUint8Array = new Uint8Array(await mainWasm.arrayBuffer());
         const mainZkey = await fetch("../../circuits/circom/main_0001.zkey");
         const mainZkeyUint8Array = new Uint8Array(await mainZkey.arrayBuffer());
-        setStatus(mainWasmUint8Array.length.toString());
-        /* const { proof, publicSignals } = await snarkjs.groth16.fullProve(
+        const { proof, publicSignals } = await snarkjs.groth16.fullProve(
             input,
             mainWasmUint8Array,
             mainZkeyUint8Array
         );
-        setStatus(publicSignals.length.toString()); */
     }
 
+    // TODO: for some reason doesn't work. Version problem?
     async function getNoirProof(root: string) {
         const relayer = "0x0000000000000000000000000000000000000000";
         const fee = "0x0000000000000000000000000000000000000000000000000000000000000000";
@@ -185,17 +172,9 @@ const Home: NextPage = () => {
             refundSquare: fee
         };
         const { witness } = await noir.execute(input);
-        setCalculatingProof(true);
         const proofData: ProofData = await backend.generateProof(witness);
-        setCalculatingProof(false);
 
         const isValid = await backend.verifyProof(proofData);
-        //setStatus(isValid.toString());
-        /* setStatus(ethers.hexlify(abiCoder.encode(
-                ["tuple(bool, bytes32 , bytes32, address, bytes)"],
-                [[false, "0x" + nullifierHashToWithdraw.toString(16), root, recipient, ethers.hexlify(proofData.proof)]]
-            ))); */
-        setStatus(ethers.hexlify(proofData.proof));
 
         return ethers.hexlify(proofData.proof);
     }
@@ -203,23 +182,27 @@ const Home: NextPage = () => {
     useEffect(() => {
         if (nullifierStringToDeposit.length === 0) {
             setNullifierToDeposit(0n);
-            setNullifierHashToDeposit(0n);
+            setCommitmentToDeposit("");
         }
         else {
             const hash = getHash(nullifierStringToDeposit);
             setNullifierToDeposit(hash);
-            setNullifierHashToDeposit(poseidon1([hash]));
+            if (secretStringToDeposit.length !== 0 ) {
+                setCommitmentToDeposit(ethers.hexlify(ethers.zeroPadValue(ethers.toBeHex(poseidon2([hash, secretToDeposit])), 32)));
+            }
         }
     }, [nullifierStringToDeposit]);
 
     useEffect(() => {
         if (secretStringToDeposit.length === 0) {
             setSecretToDeposit(0n);
-            setSecretHashToDeposit(0n);
+            setCommitmentToDeposit("");
         } else {
             const hash = getHash(secretStringToDeposit);
             setSecretToDeposit(hash);
-            setSecretHashToDeposit(poseidon1([hash]));
+            if (nullifierStringToDeposit.length !== 0 ) {
+                setCommitmentToDeposit(ethers.hexlify(ethers.zeroPadValue(ethers.toBeHex(poseidon2([nullifierToDeposit, hash])), 32)));
+            }
         }
     }, [secretStringToDeposit]);
 
@@ -235,22 +218,38 @@ const Home: NextPage = () => {
         }
     }, [nullifierStringToWithdraw]);
 
-    useEffect(() => {
-        if (secretStringToWithdraw.length === 0) {
-            setSecretToWithdraw(0n);
-            setSecretHashToWithdraw(0n);
-        } else {
-            const hash = getHash(secretStringToWithdraw);
-            setSecretToWithdraw(hash);
-            setSecretHashToWithdraw(poseidon1([hash]));
-        }
-    }, [secretStringToWithdraw])
-
     return (
         <>
         
         <div className="mx-auto mt-7">
-            <form className="w-[500px] bg-base-100 rounded-3xl shadow-xl border-pink-700 border-2 p-2 px-7 py-5 flex justify-center">
+            <form className="w-[700px] bg-base-100 rounded-3xl shadow-xl border-pink-700 border-2 p-2 px-7 py-5 flex justify-center">
+                <div className="mt-3 flex flex-col space-y-3">
+                    <div className="form-control mb-5">
+                        <span className="text-1xl">
+                            Pool Id: {toId()}
+                        </span>
+                    </div>
+                    <div className="form-control mb-5">
+                        <span className="text-1xl">
+                            Current tree number: {treeNumber}
+                        </span>
+                    </div>
+                    <div className="form-control mb-5">
+                        <span className="text-1xl">
+                            Next free leaf index: {nextLeafIndex}
+                        </span>
+                    </div>
+                    {commitmentToDeposit.length !== 0 && (
+                        <div className="form-control mb-5">
+                            <span className="text-1xl">
+                                Your commitment: {commitmentToDeposit}
+                            </span>
+                        </div>
+                    )}
+                </div>
+            </form>
+
+            <form className="mt-7 mx-25 w-[500px] bg-base-100 rounded-3xl shadow-xl border-pink-700 border-2 p-2 px-7 py-5 flex justify-center">
                 <div className="mt-3 flex flex-col space-y-3">
                     <div className="form-control mb-5">
                         <span className="text-1xl">
@@ -280,7 +279,7 @@ const Home: NextPage = () => {
                                     try {
                                         await token0ContractWrite({
                                             functionName: "approve",
-                                            args: [router?.address, ethers.MaxUint256],
+                                            args: [entry?.address, ethers.MaxUint256],
                                         });
                                     } catch (e) {
                                         console.error("Error approve token0:", e);
@@ -318,7 +317,7 @@ const Home: NextPage = () => {
                                     try {
                                         await token1ContractWrite({
                                             functionName: "approve",
-                                            args: [router?.address, ethers.MaxUint256],
+                                            args: [entry?.address, ethers.MaxUint256],
                                         });
                                     } catch (e) {
                                         console.error("Error approve token1:", e);
@@ -331,7 +330,7 @@ const Home: NextPage = () => {
                 </div>
             </form>
 
-            <form className="mt-7 w-[500px] bg-base-100 rounded-3xl shadow-xl border-pink-700 border-2 p-2 px-7 py-5 flex justify-center">
+            <form className="mt-7 mx-25 w-[500px] bg-base-100 rounded-3xl shadow-xl border-pink-700 border-2 p-2 px-7 py-5 flex justify-center">
                 <div className="mt-3 flex flex-col space-y-3">
                     <span className="text-2xl flex justify-center">
                         Deposit
@@ -353,12 +352,12 @@ const Home: NextPage = () => {
                         className="btn btn-primary"
                         onClick={async () => {
                             try {
-                                await routerWrite({
-                                    functionName: "modifyLiquidity",
+                                await entryWrite({
+                                    functionName: "deposit",
                                     args: [
-                                        poolKey,
-                                        getParams(true),
-                                        ethers.hexlify(ethers.zeroPadValue(ethers.toBeHex(poseidon2([nullifierToDeposit, secretToDeposit])), 32)),
+                                        token0Contract?.address,
+                                        token1Contract?.address,
+                                        ethers.hexlify(ethers.zeroPadValue(ethers.toBeHex(poseidon2([nullifierToDeposit, secretToDeposit])), 32)) as `0x${string}`,
                                     ],
                                 });
                             } catch (e) {
@@ -370,13 +369,13 @@ const Home: NextPage = () => {
                 </div>
             </form>
 
-            <form className="mt-7 w-[500px] bg-base-100 rounded-3xl shadow-xl border-pink-700 border-2 p-2 px-7 py-5 flex justify-center">
+            <form className="mt-7 mx-25 w-[500px] bg-base-100 rounded-3xl shadow-xl border-pink-700 border-2 p-2 px-7 py-5 flex justify-center">
                 <div className="mt-3 flex flex-col space-y-3">
                     <span className="text-2xl flex justify-center">
                         Withdraw
                     </span>
-                    <div className="mb-3 flex items-center space-x-10">
-                        <label className="flex items-center gap-2">
+                    <div className="mb-3 flex items-center space-x-10 mx-5">
+                        <label className="flex items-center gap-2 mx-5">
                         <input
                             type="radio"
                             name="verifierChoice"
@@ -387,7 +386,7 @@ const Home: NextPage = () => {
                         Circom
                         </label>
 
-                        <label className="flex items-center gap-2">
+                        <label className="flex items-center gap-2 mx-5">
                         <input
                             type="radio"
                             name="verifierChoice"
@@ -406,10 +405,10 @@ const Home: NextPage = () => {
                     <InputBase name="nullifierToWithdraw" placeholder="nullifier" value={nullifierStringToWithdraw} onChange={setNullifierStringToWithdraw} />
                     <label className="label">
                         <span className="label-text font-bold">
-                            Secret:
+                            Root:
                         </span>
                     </label>
-                    <InputBase name="secretToWithdraw" placeholder="secret" value={secretStringToWithdraw} onChange={setSecretStringToWithdraw} />
+                    <InputBase name="root" placeholder="root" value={root} onChange={setRoot} />
                     <label className="label">
                         <span className="label-text font-bold">
                             Recipient:
@@ -418,26 +417,20 @@ const Home: NextPage = () => {
                     <AddressInput onChange={setRecipient} value={recipient} placeholder="recipient" />
                     <label className="label">
                         <span className="label-text font-bold">
-                            Tree Number:
+                            Proof:
                         </span>
                     </label>
-                    <IntegerInput name="treeNumber" placeholder="tree number" value={treeNumber} onChange={setTreeNumber} />
-                    <label className="label">
-                        <span className="label-text font-bold">
-                            Commitment Index:
-                        </span>
-                    </label>
-                    <IntegerInput name="commitmentIndex" placeholder="commitment index" value={commitmentIndex} onChange={setCommitmentIndex} />
+                    <InputBase name="proof" placeholder="proof" value={proof} onChange={setProof} />
                     <button
                         type="button"
                         className="btn btn-primary"
                         onClick={async () => {
                             try {
-                                await routerWrite({
-                                    functionName: "modifyLiquidity",
+                                await entryWrite({
+                                    functionName: "withdraw",
                                     args: [
-                                        poolKey,
-                                        getParams(false),
+                                        token0Contract?.address,
+                                        token1Contract?.address,
                                         await getWithdrawalData(),
                                     ],
                                 });
@@ -447,22 +440,8 @@ const Home: NextPage = () => {
                         }}>
                         Withdraw
                     </button>
-                    <button
-                        type="button"
-                        className="btn btn-primary"
-                        onClick={async () => {
-                            try {
-                                getCircomProof();
-                            } catch (e) {
-                                console.error("Error test:", e);
-                            }
-                        }}>
-                        test
-                    </button>
                 </div>
-                {status}
             </form>
-            {status}
         </div>
         </>
     );
