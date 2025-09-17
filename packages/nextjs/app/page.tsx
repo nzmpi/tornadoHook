@@ -10,7 +10,7 @@ import { poseidon1, poseidon2 } from "poseidon-lite";
 import { Noir, InputMap } from "@noir-lang/noir_js";
 import { UltraHonkBackend, ProofData } from "@aztec/bb.js";
 import * as snarkjs from "snarkjs";
-import circuit from "../../circuits/noir/target/noir.json";
+import circuit from "../utils/noir.json";
 
 const FIELD_SIZE = BigInt("0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001");
 const LEVELS = 20;
