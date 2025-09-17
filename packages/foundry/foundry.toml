@@ -26,6 +26,7 @@ scroll = "https://rpc.scroll.io"
 pgn = "https://rpc.publicgoods.network"
 pgnTestnet = "https://sepolia.publicgoods.network"
 localhost = "http://127.0.0.1:8545"
+unichainSepolia = "https://sepolia.unichain.org"
 
 [fmt]
 sort_imports = true

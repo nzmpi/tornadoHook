@@ -81,7 +81,14 @@ contract ScaffoldETHDeploy is Script {
     }
 
     function getChain() public returns (Chain memory) {
-        return getChain(block.chainid);
+        if (block.chainid == 1301) {
+            return Chain({
+                name: "Unichain Sepolia",
+                chainId: 1301,
+                chainAlias: "unichainSepolia",
+                rpcUrl: "https://sepolia.unichain.org"
+            });
+        } else return getChain(block.chainid);
     }
 
     function anvil_setBalance(address addr, uint256 amount) public {

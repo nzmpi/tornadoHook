@@ -65,6 +65,7 @@
     "circomlib": "^2.0.5",
     "ethers": "^6.15.0",
     "poseidon-lite": "^0.3.0",
-    "snarkjs": "^0.7.5"
+    "snarkjs": "^0.7.5",
+    "vercel": "^48.0.2"
   }
 }
