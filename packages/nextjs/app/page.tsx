@@ -222,7 +222,7 @@ const Home: NextPage = () => {
         <>
         
         <div className="mx-auto mt-7">
-            <form className="w-[700px] bg-base-100 rounded-3xl shadow-xl border-pink-700 border-2 p-2 px-7 py-5 flex justify-center">
+            <form className="w-[700px] bg-base-100 rounded-3xl shadow-xl border-emerald-300 border-2 p-2 px-7 py-5 flex justify-center">
                 <div className="mt-3 flex flex-col space-y-3">
                     <div className="form-control mb-5">
                         <span className="text-1xl">
@@ -249,7 +249,7 @@ const Home: NextPage = () => {
                 </div>
             </form>
 
-            <form className="mt-7 mx-25 w-[500px] bg-base-100 rounded-3xl shadow-xl border-pink-700 border-2 p-2 px-7 py-5 flex justify-center">
+            <form className="mt-7 mx-25 w-[500px] bg-base-100 rounded-3xl shadow-xl border-emerald-300 border-2 p-2 px-7 py-5 flex justify-center">
                 <div className="mt-3 flex flex-col space-y-3">
                     <div className="form-control mb-5">
                         <span className="text-1xl">
@@ -330,7 +330,7 @@ const Home: NextPage = () => {
                 </div>
             </form>
 
-            <form className="mt-7 mx-25 w-[500px] bg-base-100 rounded-3xl shadow-xl border-pink-700 border-2 p-2 px-7 py-5 flex justify-center">
+            <form className="mt-7 mx-25 w-[500px] bg-base-100 rounded-3xl shadow-xl border-emerald-300 border-2 p-2 px-7 py-5 flex justify-center">
                 <div className="mt-3 flex flex-col space-y-3">
                     <span className="text-2xl flex justify-center">
                         Deposit
@@ -369,7 +369,7 @@ const Home: NextPage = () => {
                 </div>
             </form>
 
-            <form className="mt-7 mx-25 w-[500px] bg-base-100 rounded-3xl shadow-xl border-pink-700 border-2 p-2 px-7 py-5 flex justify-center">
+            <form className="mt-7 mx-25 w-[500px] bg-base-100 rounded-3xl shadow-xl border-emerald-300 border-2 p-2 px-7 py-5 flex justify-center">
                 <div className="mt-3 flex flex-col space-y-3">
                     <span className="text-2xl flex justify-center">
                         Withdraw
